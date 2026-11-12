@@ -46,8 +46,9 @@ xattr -dr com.apple.quarantine /Applications/ColimaBar.app
 git clone https://github.com/tdi/colimabar.git
 cd colimabar
 ./build-app.sh
-open ColimaBar.app
 ```
+
+`build-app.sh` installs to `/Applications/ColimaBar.app` and relaunches it (skipped when `CI` is set). Launch from there: a copy run from the repo can fail to open from menu bar managers such as Ice.
 
 To create a DMG:
 

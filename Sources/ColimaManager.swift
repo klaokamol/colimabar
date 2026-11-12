@@ -43,6 +43,7 @@ final class ColimaManager: ObservableObject {
     /// Set when a start/stop command fails; cleared on the next successful
     /// action or refresh. Surfaced in the menu so failures are not silent.
     @Published private(set) var actionError: String?
+    @Published private(set) var composeProjects: [String: [ComposeProject]] = [:]
 
     private let colimaPath: String
     private var statusCheckTimer: Timer?
@@ -122,6 +123,7 @@ final class ColimaManager: ObservableObject {
                 instances = merge(parsed: parseInstancesJSON(result.output))
                 loadState = .loaded
                 actionError = nil
+                await refreshComposeProjects()
             } else {
                 loadState = .error(Self.friendlyError(from: result.output))
             }
@@ -270,6 +272,31 @@ final class ColimaManager: ObservableObject {
                 actionError = "Failed to delete \(profile)"
             }
             refreshInstances()
+        }
+    }
+
+    private func refreshComposeProjects() async {
+        var projects: [String: [ComposeProject]] = [:]
+        for instance in instances where instance.status.isRunning {
+            let result = await runCommand([
+                "docker", "-H", ComposeProject.dockerHost(profile: instance.name),
+                "compose", "ls", "--format", "json"
+            ])
+            if result.exitCode == 0 {
+                projects[instance.name] = ComposeProject.parseList(result.output)
+            }
+        }
+        composeProjects = projects
+    }
+
+    func composeDown(_ target: ComposeTarget) {
+        Task {
+            let result = await runCommand([
+                "docker", "-H", ComposeProject.dockerHost(profile: target.profile),
+                "compose", "-p", target.project, "down"
+            ])
+            actionError = result.exitCode == 0 ? nil : "Failed to down \(target.project)"
+            await refreshComposeProjects()
         }
     }
 

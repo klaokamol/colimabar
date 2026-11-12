@@ -289,8 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// PATH. The profile is single-quoted; the whole command is escaped for the
     /// AppleScript string literal.
     private func openShell(profile: String) {
-        let command = "\(colimaManager.executablePath) ssh -p '\(profile)'"
-        let escaped = command
+        let escaped = colimaManager.shellCommand(profile: profile)
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let source = """

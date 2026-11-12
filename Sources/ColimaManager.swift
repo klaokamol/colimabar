@@ -5,11 +5,12 @@ enum ColimaStatus: String, Equatable {
     case stopped = "Stopped"
     case starting = "Starting..."
     case stopping = "Stopping..."
+    case deleting = "Deleting..."
     case unknown = "Unknown"
 
     var isRunning: Bool { self == .running }
     var isStopped: Bool { self == .stopped }
-    var isTransitioning: Bool { self == .starting || self == .stopping }
+    var isTransitioning: Bool { self == .starting || self == .stopping || self == .deleting }
 }
 
 struct ColimaInstance: Identifiable, Equatable {
@@ -46,10 +47,13 @@ final class ColimaManager: ObservableObject {
 
     private let colimaPath: String
     private var statusCheckTimer: Timer?
-
-    /// Resolved path to the colima executable, for callers that need to build
-    /// their own command (e.g. opening an SSH session in Terminal).
-    var executablePath: String { colimaPath }
+    private var watcher: DirectoryWatcher?
+    private var listed: [ColimaInstance] = [] { didSet { publishInstances() } }
+    private var pending: [String: ColimaInstance] = [:] { didSet { publishInstances() } }
+    private var reloadGeneration = 0
+    // ponytail: watches only ~/.colima/_lima, ignores COLIMA_HOME/LIMA_HOME; read them from the user's shell if needed
+    private static let limaHome = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".colima/_lima", isDirectory: true)
 
     var hasRunningInstance: Bool {
         instances.contains { $0.status.isRunning }
@@ -97,34 +101,42 @@ final class ColimaManager: ObservableObject {
     func startStatusChecking() {
         refreshInstances()
         scheduleTimer()
+        watcher = DirectoryWatcher(root: Self.limaHome) { [weak self] in
+            self?.refreshInstances()
+        }
     }
 
     private func scheduleTimer() {
         statusCheckTimer?.invalidate()
         statusCheckTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshIfIdle()
+                self?.refreshInstances()
             }
-        }
-    }
-
-    private func refreshIfIdle() {
-        let hasTransitioning = instances.contains { $0.status.isTransitioning }
-        if !hasTransitioning {
-            refreshInstances()
         }
     }
 
     func refreshInstances() {
-        Task {
-            let result = await runCommand([colimaPath, "ls", "--json"])
-            if result.exitCode == 0 {
-                instances = merge(parsed: parseInstancesJSON(result.output))
-                loadState = .loaded
-                actionError = nil
-            } else {
-                loadState = .error(Self.friendlyError(from: result.output))
-            }
+        Task { await reload() }
+    }
+
+    private func reload() async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        let result = await runCommand([colimaPath, "ls", "--json"])
+        guard generation == reloadGeneration else { return }
+        if result.exitCode == 0 {
+            listed = Self.parseInstances(result.output)
+            loadState = .loaded
+            actionError = nil
+        } else {
+            loadState = .error(Self.friendlyError(from: result.output))
+        }
+    }
+
+    private func publishInstances() {
+        let next = Self.overlay(listed, pending: pending)
+        if next != instances {
+            instances = next
         }
     }
 
@@ -139,23 +151,21 @@ final class ColimaManager: ObservableObject {
         return trimmed
     }
 
-    /// Preserve in-flight transition status when replacing the instance list.
-    /// colima reports the pre-transition status (Stopped/Running) while a
-    /// start/stop is running, so a refresh mid-transition would otherwise wipe
-    /// the .starting/.stopping overlay the UI depends on.
-    private func merge(parsed: [ColimaInstance]) -> [ColimaInstance] {
-        parsed.map { instance in
-            if let existing = instances.first(where: { $0.name == instance.name }),
-               existing.status.isTransitioning {
-                var updated = instance
-                updated.status = existing.status
-                return updated
-            }
-            return instance
+    nonisolated static func overlay(_ listed: [ColimaInstance], pending: [String: ColimaInstance]) -> [ColimaInstance] {
+        let shown = listed.map { instance in
+            guard let action = pending[instance.name] else { return instance }
+            var updated = instance
+            updated.status = action.status
+            return updated
         }
+        let listedNames = Set(listed.map(\.name))
+        let unlisted = pending.values
+            .filter { !listedNames.contains($0.name) }
+            .sorted { $0.name < $1.name }
+        return shown + unlisted
     }
 
-    private func parseInstancesJSON(_ output: String) -> [ColimaInstance] {
+    nonisolated static func parseInstances(_ output: String) -> [ColimaInstance] {
         var results: [ColimaInstance] = []
 
         for line in output.components(separatedBy: .newlines) where !line.isEmpty {
@@ -189,48 +199,15 @@ final class ColimaManager: ObservableObject {
     }
 
     func start(profile: String) {
-        guard let index = instances.firstIndex(where: { $0.name == profile }),
-              instances[index].status.isStopped else { return }
-
-        instances[index].status = .starting
-
-        Task {
-            let result = await runCommand([colimaPath, "start", "-p", profile])
-            if let idx = instances.firstIndex(where: { $0.name == profile }) {
-                instances[idx].status = result.exitCode == 0 ? .running : .stopped
-            }
-            actionError = result.exitCode == 0 ? nil : "Failed to start \(profile)"
-        }
+        transition(profile, "start", from: .stopped, showing: .starting)
     }
 
     func stop(profile: String) {
-        guard let index = instances.firstIndex(where: { $0.name == profile }),
-              instances[index].status.isRunning else { return }
-
-        instances[index].status = .stopping
-
-        Task {
-            let result = await runCommand([colimaPath, "stop", "-p", profile])
-            if let idx = instances.firstIndex(where: { $0.name == profile }) {
-                instances[idx].status = result.exitCode == 0 ? .stopped : .running
-            }
-            actionError = result.exitCode == 0 ? nil : "Failed to stop \(profile)"
-        }
+        transition(profile, "stop", from: .running, showing: .stopping)
     }
 
     func restart(profile: String) {
-        guard let index = instances.firstIndex(where: { $0.name == profile }),
-              instances[index].status.isRunning else { return }
-
-        instances[index].status = .starting
-
-        Task {
-            let result = await runCommand([colimaPath, "restart", "-p", profile])
-            if let idx = instances.firstIndex(where: { $0.name == profile }) {
-                instances[idx].status = result.exitCode == 0 ? .running : .stopped
-            }
-            actionError = result.exitCode == 0 ? nil : "Failed to restart \(profile)"
-        }
+        transition(profile, "restart", from: .running, showing: .starting)
     }
 
     func startAll() {
@@ -248,28 +225,53 @@ final class ColimaManager: ObservableObject {
     /// Create a new instance by starting a fresh profile with the given
     /// resources. colima takes CPUs as a count and memory/disk in GiB.
     func create(name: String, cpus: Int, memoryGiB: Int, diskGiB: Int) {
-        Task {
-            let result = await runCommand([
-                colimaPath, "start", "-p", name,
-                "--cpu", String(cpus),
-                "--memory", String(memoryGiB),
-                "--disk", String(diskGiB)
-            ])
-            actionError = result.exitCode == 0 ? nil : "Failed to create \(name)"
-            refreshInstances()
-        }
+        guard !instances.contains(where: { $0.name == name }) else { return }
+        let gib: UInt64 = 1 << 30
+        let placeholder = ColimaInstance(
+            id: name,
+            name: name,
+            status: .starting,
+            arch: "unknown",
+            cpus: cpus,
+            memory: UInt64(max(memoryGiB, 0)) * gib,
+            disk: UInt64(max(diskGiB, 0)) * gib
+        )
+        perform(placeholder, [
+            "start", "-p", name,
+            "--cpu", String(cpus),
+            "--memory", String(memoryGiB),
+            "--disk", String(diskGiB)
+        ], failure: "Failed to create \(name)")
     }
 
     func delete(profile: String) {
+        guard var instance = instances.first(where: { $0.name == profile }),
+              !instance.status.isTransitioning else { return }
+        instance.status = .deleting
+        perform(instance, ["delete", "-p", profile, "-f"], failure: "Failed to delete \(profile)")
+    }
+
+    func shellCommand(profile: String) -> String {
+        let quoted = "'" + profile.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "\(colimaPath) ssh -p \(quoted)"
+    }
+
+    private func transition(_ profile: String, _ verb: String, from required: ColimaStatus, showing: ColimaStatus) {
+        guard var instance = instances.first(where: { $0.name == profile }),
+              instance.status == required else { return }
+        instance.status = showing
+        perform(instance, [verb, "-p", profile], failure: "Failed to \(verb) \(profile)")
+    }
+
+    private func perform(_ placeholder: ColimaInstance, _ arguments: [String], failure: String) {
+        pending[placeholder.name] = placeholder
         Task {
-            let result = await runCommand([colimaPath, "delete", "-p", profile, "-f"])
-            if result.exitCode == 0 {
-                instances.removeAll { $0.name == profile }
-                actionError = nil
-            } else {
-                actionError = "Failed to delete \(profile)"
+            let result = await runCommand([colimaPath] + arguments)
+            await reload()
+            pending[placeholder.name] = nil
+            if result.exitCode != 0 {
+                actionError = failure
             }
-            refreshInstances()
         }
     }
 

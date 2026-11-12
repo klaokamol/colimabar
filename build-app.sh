@@ -38,3 +38,11 @@ echo "Verifying signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 echo "App bundle created and signed at $APP_BUNDLE"
+
+if [ -z "$CI" ]; then
+    echo "Installing to /Applications..."
+    pkill -x "$APP_NAME" || true
+    rm -rf "/Applications/$APP_BUNDLE"
+    ditto "$APP_BUNDLE" "/Applications/$APP_BUNDLE"
+    open "/Applications/$APP_BUNDLE"
+fi

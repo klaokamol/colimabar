@@ -290,9 +290,9 @@ final class ColimaManager: ObservableObject {
 
                 do {
                     try process.run()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()
 
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     let output = String(data: data, encoding: .utf8) ?? ""
 
                     continuation.resume(returning: (output, process.terminationStatus))

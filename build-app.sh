@@ -19,6 +19,8 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
 cp "Sources/Info.plist" "$APP_BUNDLE/Contents/"
+cp "Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
+cp "Resources/Assets.car" "$APP_BUNDLE/Contents/Resources/"
 
 # Set version on the bundle's Info.plist copy. `Set` errors on a missing key,
 # so a renamed/removed key fails the build instead of silently shipping wrong.

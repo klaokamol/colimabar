@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // at its natural size and then downscaled by AppKit to fit the status
         // bar; on non-Retina (1x) external displays that downscale misaligns the
         // pixel grid and the icon looks blurry. See issue #2.
-        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)?
             .withSymbolConfiguration(config) {
             image.isTemplate = true

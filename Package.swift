@@ -11,6 +11,11 @@ let package = Package(
             name: "ColimaBar",
             path: "Sources",
             exclude: ["Info.plist"]
+        ),
+        .testTarget(
+            name: "ColimaBarTests",
+            dependencies: ["ColimaBar"],
+            path: "Tests"
         )
     ]
 )

@@ -29,7 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Publishers.MergeMany(
             colimaManager.$instances.map { _ in () }.eraseToAnyPublisher(),
             colimaManager.$loadState.map { _ in () }.eraseToAnyPublisher(),
-            colimaManager.$actionError.map { _ in () }.eraseToAnyPublisher()
+            colimaManager.$actionError.map { _ in () }.eraseToAnyPublisher(),
+            colimaManager.$composeProjects.map { _ in () }.eraseToAnyPublisher()
         )
         .sink { [weak self] _ in
             self?.updateStatusIcon()
@@ -226,6 +227,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     shellItem.target = self
                     shellItem.representedObject = instance.name
                     instanceMenu.addItem(shellItem)
+
+                    if let projectsItem = composeProjectsMenuItem(profile: instance.name) {
+                        instanceMenu.addItem(projectsItem)
+                    }
                 } else {
                     let transitionItem = NSMenuItem(title: instance.status.rawValue, action: nil, keyEquivalent: "")
                     transitionItem.isEnabled = false
@@ -246,6 +251,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(instanceItem)
             }
         }
+    }
+
+    private func composeProjectsMenuItem(profile: String) -> NSMenuItem? {
+        guard let projects = colimaManager.composeProjects[profile], !projects.isEmpty else { return nil }
+
+        let submenu = NSMenu()
+        for project in projects {
+            let downItem = NSMenuItem(title: "Down \(project.name) (\(project.status))", action: #selector(composeDown(_:)), keyEquivalent: "")
+            downItem.target = self
+            downItem.representedObject = ComposeTarget(profile: profile, project: project.name)
+            submenu.addItem(downItem)
+        }
+
+        let item = NSMenuItem(title: "Projects", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        return item
+    }
+
+    @objc private func composeDown(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? ComposeTarget else { return }
+        colimaManager.composeDown(target)
     }
 
     @objc private func startInstance(_ sender: NSMenuItem) {

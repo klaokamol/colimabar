@@ -258,7 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let submenu = NSMenu()
         for project in projects {
-            let downItem = NSMenuItem(title: "Down \(project.name) (\(project.status))", action: #selector(composeDown(_:)), keyEquivalent: "")
+            let count = project.runningCount.map(String.init) ?? project.status
+            let downItem = NSMenuItem(title: "Down · \(project.folderLabel ?? project.name) · \(count)", action: #selector(composeDown(_:)), keyEquivalent: "")
+            downItem.toolTip = ([project.name] + project.configPaths).joined(separator: "\n")
             downItem.target = self
             downItem.representedObject = ComposeTarget(profile: profile, project: project.name)
             submenu.addItem(downItem)
